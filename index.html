@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>USB 自定义协议调试工具（Web 版）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#16181d; --panel:#1e2228; --line:#33383f; --fg:#d8dce2; --dim:#8b919a;
+          --acc:#4f8cff; --ok:#3fb96f; --warn:#e0a23c; --err:#e05252; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 "Segoe UI",Consolas,monospace; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--err); }
+  .dot.on { background:var(--ok); }
+  button { background:#2a2f37; color:var(--fg); border:1px solid var(--line); border-radius:4px;
+           padding:5px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--acc); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.danger { background:#7a2c2c; border-color:#a04040; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  select,input,textarea { background:#12151a; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:inherit; }
+  textarea { resize:vertical; }
+  nav { display:flex; gap:2px; padding:0 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  nav button { border:none; border-radius:0; background:transparent; padding:9px 16px; color:var(--dim); }
+  nav button.act { color:var(--fg); border-bottom:2px solid var(--acc); }
+  main { padding:14px 16px; }
+  .tab { display:none; } .tab.act { display:block; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; margin-bottom:12px; }
+  .card h3 { margin:0 0 10px; font-size:13px; color:var(--acc); font-weight:600; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:6px 0; }
+  .row label { color:var(--dim); min-width:70px; }
+  #log { background:#0c0e11; border:1px solid var(--line); border-radius:6px; height:300px; overflow-y:auto;
+         padding:8px; font:12px/1.45 Consolas,monospace; white-space:pre-wrap; word-break:break-all; }
+  .log-up { color:#7ec8ff; } .log-down { color:#9fe29f; } .log-err { color:#ff8f8f; }
+  .log-info { color:var(--dim); } .log-ota { color:#e0c88f; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th,td { border:1px solid var(--line); padding:3px 8px; text-align:left; }
+  th { color:var(--dim); font-weight:600; }
+  .kbd-grid { display:grid; grid-template-columns:repeat(18,1fr); gap:3px; }
+  .kbd-grid button { padding:6px 0; font-size:11px; white-space:nowrap; overflow:hidden; padding-left:4px; padding-right:4px; }
+  .kbd-grid button.mapped { background:#1f3a1f; border-color:var(--ok); }
+  .kbd-grid button.sel { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc); }
+  .kbd-grid .empty { visibility:hidden; }
+  .progress { background:#0c0e11; border:1px solid var(--line); border-radius:4px; height:18px; position:relative; overflow:hidden; }
+  .progress > div { background:var(--acc); height:100%; width:0; transition:width .2s; }
+  .progress span { position:absolute; inset:0; text-align:center; font-size:11px; line-height:17px; }
+  .effect-btns { display:flex; flex-wrap:wrap; gap:6px; }
+  .effect-btns button { min-width:90px; }
+  .effect-btns button.act { background:#1f3a1f; border-color:var(--ok); }
+  .preset { width:26px; height:26px; border-radius:4px; border:1px solid var(--line); cursor:pointer; padding:0; }
+  input[type=range] { width:150px; }
+  .mono { font-family:Consolas,monospace; }
+  .hint { color:var(--dim); font-size:12px; }
+  .dlg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:9; }
+  .dlg.act { display:flex; }
+  .dlg > div { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; min-width:360px; }
+  .flex1 { flex:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>USB 自定义协议调试工具</h1>
+  <div id="connDot" class="dot"></div>
+  <span id="connText" class="hint">未连接</span>
+  <span class="flex1"></span>
+  <button id="btnConn" class="primary">连接设备</button>
+  <button id="btnDisc" disabled>断开</button>
+  <button id="btnClear">清空日志</button>
+</header>
+
+<nav id="tabs">
+  <button data-tab="data" class="act">数据通信</button>
+  <button data-tab="cfg">设备配置</button>
+  <button data-tab="key">改键</button>
+  <button data-tab="light">灯效</button>
+  <button data-tab="macro">宏录制</button>
+  <button data-tab="ota">USB OTA升级(HID)</button>
+  <button data-tab="help">说明</button>
+</nav>
+
+<main>
+<!-- ========== 数据通信 ========== -->
+<div class="tab act" id="tab-data">
+  <div class="card">
+    <h3>原始收发</h3>
+    <div class="row">
+      <label>发送 RID</label><input id="ridSend" class="mono" value="186" style="width:70px">
+      <label>接收 RID</label><input id="ridRecv" class="mono" value="186" style="width:70px">
+      <label>读取长度</label><input id="ridLen" class="mono" value="64" style="width:60px">
+      <label>格式</label>
+      <select id="rawFmt"><option value="hex">HEX</option><option value="ascii">ASCII</option></select>
+    </div>
+    <div class="row">
+      <textarea id="rawData" class="mono flex1" rows="2" placeholder="HEX: AA 1B 00 00 00 07 00 01 60 30 FF FF 00   |   ASCII: 直接输入文本"></textarea>
+    </div>
+    <div class="row">
+      <button id="btnRawSend" class="primary">发送</button>
+      <button id="btnRawRecv">读取(Feature)</button>
+      <span class="hint">0xAA 协议帧会自动解析显示；设备主动上报(心跳/响应)会实时出现在日志里</span>
+    </div>
+  </div>
+  <div class="card">
+    <h3>协议日志</h3>
+    <div id="log"></div>
+  </div>
+</div>
+
+<!-- ========== 设备配置 ========== -->
+<div class="tab" id="tab-cfg">
+  <div class="card">
+    <h3>配置列表（设备端存储，cmd 0x01/0x02）</h3>
+    <div class="row">
+      <button id="btnCfgQuery" class="primary">查询配置</button>
+      <span class="hint">bit7=1 的为当前激活配置；第 0 套默认 Default 不可改名</span>
+    </div>
+    <table id="cfgTbl"><thead><tr><th>索引</th><th>名称</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h3>新增 / 修改配置名称</h3>
+    <div class="row">
+      <label>索引</label>
+      <select id="cfgIdx"><option>0</option><option>1</option><option>2</option></select>
+      <label>名称</label><input id="cfgName" maxlength="16" style="width:180px">
+      <button id="btnCfgSet">写入名称(cmd 0x02)</button>
+      <button id="btnCfgDel" class="danger">删除该配置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 改键 ========== -->
+<div class="tab" id="tab-key">
+  <div class="card">
+    <div class="row">
+      <label>配置</label><select id="keyCfg"><option>0</option><option>1</option><option>2</option></select>
+      <button id="btnFn" type="button">FN 层: 关</button>
+      <button id="btnKeyQuery" class="primary">读取全部按键</button>
+      <span class="hint">keyId = 行×18+列；FN 层 keyid 位15 置位。绿框 = 已改键</span>
+      <span class="flex1"></span>
+      <span id="keyStatus" class="hint"></span>
+    </div>
+    <div id="kbdGrid" class="kbd-grid"></div>
+  </div>
+  <div class="card" id="keyEdit" style="display:none">
+    <h3 id="keyEditTitle">按键修改</h3>
+    <div class="row">
+      <label>功能类型</label>
+      <select id="keyType">
+        <option value="none">恢复默认(无)</option>
+        <option value="basic">普通按键 (cmd 0x04)</option>
+        <option value="media">多媒体键 (cmd 0x18)</option>
+        <option value="macro">宏 (cmd 0x19)</option>
+      </select>
+      <span id="keyPickWrap"></span>
+      <button id="btnKeyApply" class="primary">写入设备</button>
+      <button id="btnKeyCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 灯效 ========== -->
+<div class="tab" id="tab-light">
+  <div class="card">
+    <h3>灯光效果 (cmd 0x1B / 0x1C)</h3>
+    <div class="row">
+      <label>区域</label>
+      <select id="lightZone"><option value="0">轴下灯</option><option value="1">侧灯</option></select>
+      <label>亮度</label><input type="range" id="lightBri" min="0" max="100" value="60"><span id="lightBriV">60</span>
+      <label>速度</label><input type="range" id="lightSpd" min="0" max="100" value="50"><span id="lightSpdV">50</span>
+    </div>
+    <div class="row">
+      <label>颜色</label>
+      <input type="range" id="cr" min="0" max="255" value="255"><span id="crV" class="mono">255</span>
+      <input type="range" id="cg" min="0" max="255" value="255"><span id="cgV" class="mono">255</span>
+      <input type="range" id="cb" min="0" max="255" value="255"><span id="cbV" class="mono">255</span>
+      <div id="lightPrev" style="width:34px;height:26px;border-radius:4px;border:1px solid var(--line);background:#fff"></div>
+      <span id="presetWrap"></span>
+    </div>
+    <div class="row effect-btns" id="effectBtns"></div>
+    <div class="row">
+      <button id="btnLightSend" class="primary">设置灯效</button>
+      <button id="btnLightQuery">读取当前灯效</button>
+      <span id="lightStatus" class="hint"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 宏录制 ========== -->
+<div class="tab" id="tab-macro">
+  <div class="card">
+    <h3>宏列表（cmd 0x08/0x05/0x06/0x07）</h3>
+    <div class="row">
+      <button id="btnMacroList" class="primary">刷新宏列表</button>
+      <button id="btnMacroQuery">下载选中宏内容</button>
+      <button id="btnMacroDel" class="danger">删除选中宏</button>
+      <span class="hint">宏 ID 0x66~0x7F，可绑定到按键（改键页选"宏"）</span>
+    </div>
+    <table id="macroTbl"><thead><tr><th>ID</th><th>名称</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h3>录制 / 编辑宏</h3>
+    <div class="row">
+      <label>宏ID</label>
+      <select id="macId"></select>
+      <label>名称</label><input id="macName" maxlength="8" style="width:120px" value="MACRO1">
+      <label>重复</label><input id="macRepeat" class="mono" style="width:60px" value="1" title="0=只执行一次，255=无限循环">
+      <button id="btnMacRec" class="primary">开始录制</button>
+      <button id="btnMacStop">停止录制</button>
+      <button id="btnMacClr">清空动作</button>
+      <button id="btnMacUp" class="primary">上传到设备 (0x07)</button>
+      <span class="hint">录制时直接在页面按键（目标键盘），自动记录按下/释放与间隔</span>
+    </div>
+    <div class="row"><span id="macRecState" class="hint"></span></div>
+    <table id="macroActTbl"><thead><tr><th>#</th><th>动作</th><th>键</th><th>时长/间隔(ms)</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<!-- ========== OTA ========== -->
+<div class="tab" id="tab-ota">
+  <div class="card">
+    <h3>SLB HID OTA 升级（Report ID 0xFA）</h3>
+    <div class="row">
+      <button id="btnOtaVer" class="primary">查询固件版本 (0x20)</button>
+      <span id="otaVer" class="hint"></span>
+    </div>
+    <div class="row">
+      <input type="file" id="otaFile">
+      <button id="btnOtaStart">开始升级</button>
+      <button id="btnOtaAbort" class="danger">中止</button>
+    </div>
+    <div class="row progress" style="width:100%"><div id="otaBar"></div><span id="otaPct">0%</span></div>
+    <div class="row"><span id="otaStatus" class="hint"></span></div>
+    <div class="hint">
+      流程：0x20 查版本 → 0x22 升级请求(含长度+CRC16，设备内部擦除) → 0x24 按组发数据(0xA3 确认实际写入字节)
+      → 0x25 通知完成 → 0xA5 校验结果，设备自行重启。56 字节/包，63 字节 SLB 帧。
+    </div>
+  </div>
+</div>
+
+<!-- ========== 说明 ========== -->
+<div class="tab" id="tab-help">
+  <div class="card">
+    <h3>使用说明</h3>
+    <div class="hint" style="line-height:2">
+      1. 使用 Chrome / Edge 打开本页（WebHID 需要 Chromium 内核，file:// 或 https 均可）。<br>
+      2. 点"连接设备"，弹窗选择 VID=0x1919 PID=0x1919 的键盘。<br>
+      3. 若 C# 工具同时打开了设备，先关闭它再连接。<br>
+      4. 心跳：设备通过 0xBD 报告周期上报，连接后状态点变绿表示在线。<br>
+      5. 协议帧：0xAA(主) / 0x55(响应) + flag|cmd + offset(BE) + index + len + data，无校验。<br>
+      6. 所有功能与 C# 版 usbdev 对齐：数据通信 / 设备配置 / 改键 / 灯效 / 宏 / OTA。
+    </div>
+  </div>
+</div>
+</main>
+
+<!-- 改键选择弹窗 -->
+<div class="dlg" id="keyDlg"><div>
+  <h3 id="keyDlgTitle" style="margin-top:0">选择功能</h3>
+  <div class="row"><label>类型</label>
+    <select id="dlgType"><option value="none">恢复默认</option><option value="basic">普通按键</option>
+    <option value="media">多媒体键</option><option value="macro">宏</option></select></div>
+  <div class="row" id="dlgPick"></div>
+  <div class="row"><button id="dlgOk" class="primary">确定</button><button id="dlgCancel">取消</button></div>
+</div></div>
+
+<script>
+"use strict";
+/* ================= 常量 ================= */
+const VID = 0x1919, PID = 0x1919;
+const RID_DATA = 0xBA, RID_HEART = 0xBD, RID_OTA = 0xFA;
+const REPORT_LEN = 63;                     // 数据通道负载（不含 Report ID）
+
+const CMD = {
+  QueryConfig:0x01, SetConfig:0x02, QueryKey:0x03, SetKey:0x04,
+  QueryMacro:0x05, DeleteMacro:0x06, SetMacro:0x07, GetAllMacro:0x08, AddMacro:0x09,
+  SetKeyMedia:0x18, SetKeyMacro:0x19, QueryAllKey:0x1A, SetLight:0x1B, QueryLight:0x1C,
+};
+const ERR = {
+  0x40:"键值不存在", 0x41:"宏ID不存在", 0x42:"宏名不存在", 0x43:"宏长度错误",
+  0x44:"配置索引错误", 0x45:"读宏名失败", 0x46:"重复次数非法", 0x47:"灯效参数错误",
+};
+
+const HID_NAMES = {
+  0x04:"A",0x05:"B",0x06:"C",0x07:"D",0x08:"E",0x09:"F",0x0A:"G",0x0B:"H",0x0C:"I",0x0D:"J",
+  0x0E:"K",0x0F:"L",0x10:"M",0x11:"N",0x12:"O",0x13:"P",0x14:"Q",0x15:"R",0x16:"S",0x17:"T",
+  0x18:"U",0x19:"V",0x1A:"W",0x1B:"X",0x1C:"Y",0x1D:"Z",
+  0x1E:"1",0x1F:"2",0x20:"3",0x21:"4",0x22:"5",0x23:"6",0x24:"7",0x25:"8",0x26:"9",0x27:"0",
+  0x28:"ENTER",0x29:"ESC",0x2A:"BACKSPACE",0x2B:"TAB",0x2C:"SPACE",0x2D:"-",0x2E:"=",
+  0x2F:"[",0x30:"]",0x31:"\\",0x33:";",0x34:"'",0x35:"~",0x36:",",0x37:".",0x38:"/",
+  0x39:"CAPS_LOCK",0x3A:"F1",0x3B:"F2",0x3C:"F3",0x3D:"F4",0x3E:"F5",0x3F:"F6",
+  0x40:"F7",0x41:"F8",0x42:"F9",0x43:"F10",0x44:"F11",0x45:"F12",
+  0x46:"PRINT_SCREEN",0x47:"SCROLL_LOCK",0x48:"PAUSE",0x49:"INSERT",0x4A:"HOME",
+  0x4B:"PG_UP",0x4C:"DELETE",0x4D:"END",0x4E:"PG_DOWN",
+  0x4F:"ARROW_RIGHT",0x50:"ARROW_LEFT",0x51:"ARROW_DOWN",0x52:"ARROW_UP",
+  0x53:"NUM_LOCK",0x54:"NUM_/",0x55:"NUM_*",0x56:"NUM_-",0x57:"NUM_+",0x58:"NUM_ENTER",
+  0x59:"NUM_1",0x5A:"NUM_2",0x5B:"NUM_3",0x5C:"NUM_4",0x5D:"NUM_5",0x5E:"NUM_6",
+  0x5F:"NUM_7",0x60:"NUM_8",0x61:"NUM_9",0x62:"NUM_0",0x63:"NUM_.",0x65:"MENU",
+  0xE0:"L_CTRL",0xE1:"L_SHIFT",0xE2:"L_ALT",0xE3:"L_GUI",
+  0xE4:"R_CTRL",0xE5:"R_SHIFT",0xE6:"R_ALT",0xE7:"R_GUI",
+};
+const JS2HID = {
+  KeyA:0x04,KeyB:0x05,KeyC:0x06,KeyD:0x07,KeyE:0x08,KeyF:0x09,KeyG:0x0A,KeyH:0x0B,KeyI:0x0C,KeyJ:0x0D,
+  KeyK:0x0E,KeyL:0x0F,KeyM:0x10,KeyN:0x11,KeyO:0x12,KeyP:0x13,KeyQ:0x14,KeyR:0x15,KeyS:0x16,KeyT:0x17,
+  KeyU:0x18,KeyV:0x19,KeyW:0x1A,KeyX:0x1B,KeyY:0x1C,KeyZ:0x1D,
+  Digit1:0x1E,Digit2:0x1F,Digit3:0x20,Digit4:0x21,Digit5:0x22,Digit6:0x23,Digit7:0x24,Digit8:0x25,
+  Digit9:0x26,Digit0:0x27,Enter:0x28,Escape:0x29,Backspace:0x2A,Tab:0x2B,Space:0x2C,
+  Minus:0x2D,Equal:0x2E,BracketLeft:0x2F,BracketRight:0x30,Backslash:0x31,IntlRo:0x31,
+  Semicolon:0x33,Quote:0x34,Backquote:0x35,Comma:0x36,Period:0x37,Slash:0x38,CapsLock:0x39,
+  F1:0x3A,F2:0x3B,F3:0x3C,F4:0x3D,F5:0x3E,F6:0x3F,F7:0x40,F8:0x41,F9:0x42,F10:0x43,F11:0x44,F12:0x45,
+  PrintScreen:0x46,ScrollLock:0x47,Pause:0x48,Insert:0x49,Home:0x4A,PageUp:0x4B,Delete:0x4C,
+  End:0x4D,PageDown:0x4E,ArrowRight:0x4F,ArrowLeft:0x50,ArrowDown:0x51,ArrowUp:0x52,
+  NumLock:0x53,NumpadDivide:0x54,NumpadMultiply:0x55,NumpadSubtract:0x56,NumpadAdd:0x57,
+  NumpadEnter:0x58,Numpad1:0x59,Numpad2:0x5A,Numpad3:0x5B,Numpad4:0x5C,Numpad5:0x5D,
+  Numpad6:0x5E,Numpad7:0x5F,Numpad8:0x60,Numpad9:0x61,Numpad0:0x62,NumpadDecimal:0x63,
+  ContextMenu:0x65,ControlLeft:0xE0,ShiftLeft:0xE1,AltLeft:0xE2,MetaLeft:0xE3,
+  ControlRight:0xE4,ShiftRight:0xE5,AltRight:0xE6,MetaRight:0xE7,
+};
+const MEDIA = {
+  0xB5:"下一曲",0xB6:"上一曲",0xB7:"停止",0xB8:"弹出",0xCD:"播放/暂停",0xE2:"静音",
+  0xE9:"音量+",0xEA:"音量-",0x92:"计算器",0x8A:"邮件",0x83:"浏览器主页",0x94:"我的电脑",
+};
+/* 物理按键矩阵（8 行 × 18 列，keyId = 行*18+列） */
+const KEYMAP_POS = {
+  F1:[6,2],F2:[6,3],F3:[1,3],F4:[3,3],F5:[7,0],F6:[3,6],F7:[1,7],F8:[6,7],F9:[6,10],F10:[7,10],F11:[3,10],F12:[5,10],
+  0:[7,8],1:[7,1],2:[7,2],3:[7,3],4:[7,4],5:[6,4],6:[6,5],7:[7,5],8:[7,6],9:[7,7],
+  A:[2,1],B:[5,4],C:[4,3],D:[2,3],E:[0,3],F:[2,4],G:[3,4],H:[3,5],I:[0,6],J:[2,5],K:[2,6],L:[2,7],
+  M:[4,5],N:[5,5],O:[0,7],P:[0,8],Q:[0,1],R:[0,4],S:[2,2],T:[1,4],U:[0,5],V:[4,4],W:[0,2],X:[4,2],Y:[1,5],Z:[4,1],
+  ARROW_UP:[3,14],ARROW_DOWN:[5,11],ARROW_LEFT:[5,14],ARROW_RIGHT:[5,12],
+  PG_UP:[6,13],PG_DOWN:[7,13],HOME:[6,14],END:[7,14],INSERT:[6,12],DELETE:[6,11],
+  BACKSPACE:[1,10],ENTER:[4,10],CAPS_LOCK:[1,2],ESC:[3,1],TAB:[1,1],SPACE:[3,11],
+  PRINT_SCREEN:[7,9],SCROLL_LOCK:[0,9],PAUSE:[0,0],
+  "~":[6,1],"-":[6,8],"=":[6,6],"[":[1,8],"]":[1,6],"\\":[2,10],";":[2,8],"'":[3,8],",":[4,6],".":[4,7],"/":[5,8],
+  NUM_LOCK:[4,11],"NUM_/":[4,12],"NUM_*":[4,13],"NUM_-":[5,13],"NUM_+":[0,14],"NUM_ENTER":[2,14],
+  "NUM_.":[3,13],"NUM_0":[3,12],"NUM_1":[2,11],"NUM_2":[2,12],"NUM_3":[2,13],
+  "NUM_4":[1,11],"NUM_5":[1,12],"NUM_6":[1,13],"NUM_7":[0,11],"NUM_8":[0,12],"NUM_9":[0,13],
+  L_SHIFT:[1,15],R_SHIFT:[2,15],L_CTRL:[6,0],R_CTRL:[4,0],L_ALT:[3,9],R_ALT:[5,9],L_GUI:[1,16],MENU:[5,7],R_GUI:[2,17],
+};
+const HID2POS = (() => {                 // HID usage -> [row,col]
+  const m = {};
+  for (const [name, usage] of Object.entries(HID_NAMES))
+    if (KEYMAP_POS[name]) m[usage] = KEYMAP_POS[name];
+  return m;
+})();
+const POS2HID = (() => {
+  const m = {};
+  for (const [usage, rc] of Object.entries(HID2POS)) m[rc.join("-")] = +usage;
+  return m;
+})();
+const EFFECTS = ["关闭","常亮","呼吸模式","波浪流动","落雨缤纷","星光闪烁","泛起涟漪",
+                 "流星赶月","峰回路转","大鹏展翅","踏雪寻梅","一触即发","点击扩散"];
+const PRESETS = [["#ff0000","红"],["#00ff00","绿"],["#0000ff","蓝"],["#ffffff","白"],
+                 ["#ffff00","黄"],["#00ffff","青"],["#ff00ff","紫"],["#ff8000","橙"],["#40e0d0","青绿"]];
+
+/* ================= 日志 ================= */
+const logEl = document.getElementById("log");
+function log(msg, cls="log-info") {
+  const t = new Date().toTimeString().slice(0,8);
+  const div = document.createElement("div");
+  div.className = cls;
+  div.textContent = `[${t}] ${msg}`;
+  logEl.appendChild(div);
+  // 防洪泛：超过 800 条丢弃最旧的
+  while (logEl.childElementCount > 800) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+/* 高频原始上报限流：每秒最多 5 条，超出合并计数 */
+let rawBudget = 5, rawSuppressed = 0, rawResetTimer = null;
+function logThrottled(msg, cls) {
+  if (rawBudget > 0) { rawBudget--; log(msg, cls); return; }
+  rawSuppressed++;
+  if (!rawResetTimer) rawResetTimer = setTimeout(() => {
+    if (rawSuppressed > 0) log(`（原始上报日志限流：已省略 ${rawSuppressed} 条）`, "log-info");
+    rawSuppressed = 0; rawBudget = 5; rawResetTimer = null;
+  }, 1000);
+}
+function hex(bytes, sep=" ") { return Array.from(bytes, b=>b.toString(16).padStart(2,"0").toUpperCase()).join(sep); }
+
+/* ================= WebHID 连接 ================= */
+let device = null, otaDevice = null, devices = [];
+let lastHeartbeat = 0, heartTimer = null, heartSeen = false;
+
+async function connect() {
+  if (!navigator.hid) { log("当前浏览器不支持 WebHID，请使用 Chrome / Edge", "log-err"); return; }
+  try {
+    const devs = await navigator.hid.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+    if (!devs.length) return;
+    disconnect();
+    device = null; otaDevice = null; devices = [];
+    // 复合设备：WebHID 按接口拆分返回多个 HIDDevice（接口0键盘/1鼠标/2协议通道/3vendor）
+    // 协议通道全部在"接口2"上：0xBD心跳 + 0xBA数据 + 0x08Feature + 0xFA OTA
+    for (const d of devs) {
+      const repTxt = [];
+      let hasData = false, hasHeart = false, hasOta = false;
+      for (const c of d.collections) {
+        for (const r of c.inputReports || []) {
+          repTxt.push("in:0x" + r.reportId.toString(16).toUpperCase());
+          if (r.reportId === RID_HEART) hasHeart = true;
+        }
+        for (const r of c.outputReports || []) {
+          repTxt.push("out:0x" + r.reportId.toString(16).toUpperCase());
+          if (r.reportId === RID_DATA) hasData = true;
+          if (r.reportId === RID_OTA) hasOta = true;
+        }
+        for (const r of c.featureReports || []) repTxt.push("feat:0x" + r.reportId.toString(16).toUpperCase());
+      }
+      log(`候选接口: [${repTxt.join(" ")}]${hasData ? " ←数据通道(0xBA)" : ""}${hasHeart ? " ←心跳(0xBD)" : ""}${hasOta ? " ←OTA(0xFA)" : ""}`);
+      if (!hasData && !hasHeart && !hasOta) { log("该接口不含 0xBA/0xBD/0xFA（标准键鼠接口），跳过"); continue; }
+      try {
+        await d.open();
+        d.addEventListener("inputreport", onInputReport);
+        devices.push(d);
+        if (hasData && !device) device = d;
+        if (hasOta && !otaDevice) otaDevice = d;
+      } catch (e) { log("打开接口失败: " + e.message, "log-err"); }
+    }
+    if (!device) {
+      log("未找到含数据通道(0xBA)的接口！请在弹窗中重新连接，并选择 VID=0x1919 PID=0x1919 的设备（若弹窗中有多条同名设备，逐条尝试）", "log-err");
+      if (!devices.length) { setConn(false); return; }
+      log(`已打开 ${devices.length} 个非协议接口，但无法收发协议数据`, "log-err");
+      return;
+    }
+    heartSeen = false;
+    setConn(true);
+    log(`已连接: ${device.productName || "HID设备"} VID=${hex16(device.vendorId)} PID=${hex16(device.productId)}（打开 ${devices.length} 个接口）`);
+  } catch (e) { log("连接失败: " + e.message, "log-err"); }
+}
+function hex16(v){ return "0x"+v.toString(16).padStart(4,"0").toUpperCase(); }
+function rids(r){ return "0x"+r.reportId.toString(16).toUpperCase(); }
+function disconnect() {
+  for (const d of devices) { try { d.close(); } catch(e){} }
+  devices = []; device = null; otaDevice = null;
+  pollRid = null;              // 重连后重新探测 Feature 轮询通道
+  setConn(false); log("已断开");
+}
+function setConn(on) {
+  document.getElementById("connDot").classList.toggle("on", on);
+  document.getElementById("connText").textContent = (on && device)
+    ? `已连接 ${(device.productName||"").trim()} (${hex16(VID)}:${hex16(PID)})`
+    : (on ? "已连接（等待心跳...）" : "未连接");
+  document.getElementById("btnConn").disabled = on;
+  document.getElementById("btnDisc").disabled = !on;
+}
+async function sendReport(rid, bytes) {
+  if (!device) throw new Error("设备未连接");
+  // Windows HID 要求输出报告缓冲为描述符定义的完整长度，不足则补零
+  if (bytes.length < REPORT_LEN) {
+    const padded = new Uint8Array(REPORT_LEN);
+    padded.set(bytes);
+    bytes = padded;
+  }
+  // OTA 在 0xFA 集合上，若枚举为独立接口则走对应设备
+  const dev = (rid === RID_OTA && otaDevice) ? otaDevice : device;
+  await dev.sendReport(rid, bytes);   // WebHID API：sendReport（输出报告），不是 sendOutputReport
+}
+document.getElementById("btnConn").onclick = connect;
+document.getElementById("btnDisc").onclick = disconnect;
+document.getElementById("btnClear").onclick = () => logEl.innerHTML = "";
+
+heartTimer = setInterval(() => {
+  const on = device && (Date.now() - lastHeartbeat < 5000);
+  document.getElementById("connDot").classList.toggle("on", !!on);
+  if (device && !on) document.getElementById("connText").textContent = "已连接（等待心跳...）";
+}, 1000);
+
+/* ================= 输入报告分发 ================= */
+function onInputReport(e) {
+  const data = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+  if (e.reportId === RID_HEART) {
+    lastHeartbeat = Date.now();
+    if (!heartSeen) { heartSeen = true; log("已收到设备心跳 (0xBD)，链路正常", "log-down"); }
+    document.getElementById("connText").textContent = `已连接 ${(device.productName||"").trim()} · 心跳正常`;
+    return; }
+  if (e.reportId === RID_DATA) { onDataReport(data); return; }
+  if (e.reportId === RID_OTA)  { onOtaReport(data); return; }
+  logThrottled(`[Input RID=0x${e.reportId.toString(16)}] ${hex(data)}`, "log-down");
+}
+
+/* ================= 0xAA / 0x55 协议层 ================= */
+function buildFrame(cmd, idx, payload, more=false, offset=0) {
+  const f = new Uint8Array(6 + payload.length);
+  f[0] = 0xAA;
+  f[1] = (more ? 0x80 : 0) | (cmd & 0x7F);
+  f[2] = (offset >> 8) & 0xFF;  f[3] = offset & 0xFF;   // offset 大端（与固件约定一致）
+  f[4] = idx & 0xFF;
+  f[5] = payload.length;
+  f.set(payload, 6);
+  return f;
+}
+function describeFrame(dir, f) {
+  const head = dir === "up" ? "0xAA" : "0x55";
+  const cmd = f[1] & 0x7F, more = !!(f[1] & 0x80);
+  const off = (f[2] << 8) | f[3], idx = f[4], len = f[5];
+  const errTxt = ERR[cmd] ? `  <-- ${ERR[cmd]}` : "";
+  const cmdName = Object.entries(CMD).find(([n,v])=>v===cmd);
+  return `${head} cmd=0x${cmd.toString(16)}${cmdName?"("+cmdName[0]+")":""} off=${off} idx=${idx} len=${len}${more?" [续包]":""}${errTxt} | ${hex(f.slice(6, 6+len))}`;
+}
+/* 响应接收：固件所有协议响应只经 EP0 GET_REPORT 返回（见 usb_setup_req.c
+ * PHY_TrySendResponse / usb_ota_try_send_response），不推中断 IN。
+ * WebHID 无法发 GET_REPORT(Input)，只能用描述符里声明的 Feature 报告轮询：
+ *   0xFA —— OTA 集合声明了 Feature（新固件），固件侧本就只认 0xFA
+ *   0x08 —— 兜底报告（旧固件已放行 0x08；PHY_TrySendResponse 不校验 ID）
+ * 首次探测可用报告后记住，后续固定使用。 */
+let pollBusy = false, pollRid = null;
+function pickResponseFrame(arr) {
+  if (!arr.length) return null;
+  if (arr[0] === 0x55) return arr;                                     // 0xAA/0x55 协议响应
+  if (arr.length > 1 && arr[1] >= 0xA0 && arr[1] <= 0xA5) return arr;  // OTA SLB 响应帧
+  if (arr.length > 1 && arr[1] === 0x55) return arr.subarray(1);       // 带 Report ID 前缀
+  if (arr.length > 2 && arr[2] >= 0xA0 && arr[2] <= 0xA5) return arr.subarray(1);
+  return null;
+}
+async function pollFeatureOnce() {
+  if (!device || pollBusy) return null;
+  pollBusy = true;
+  try {
+    let d;
+    if (pollRid === null) {
+      try { d = await device.receiveFeatureReport(0xFA); pollRid = 0xFA; }
+      catch (e1) {
+        try { d = await device.receiveFeatureReport(0x08); pollRid = 0x08; }
+        catch (e2) {
+          log(`Feature 轮询探测失败: 0xFA(${e1.message}) / 0x08(${e2.message})`, "log-err");
+          return null;
+        }
+      }
+      log(`响应轮询通道: GET_REPORT(Feature, 0x${pollRid.toString(16).toUpperCase()})` +
+          (pollRid === 0x08 ? "（旧描述符，OTA 需固件放行 0x08）" : ""));
+    } else {
+      d = await device.receiveFeatureReport(pollRid);
+    }
+    const arr = new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+    return pickResponseFrame(arr);
+  } catch (e) { return null; }
+  finally { pollBusy = false; }
+}
+
+/* 等待响应：收集同一 cmd 的 0x55 包，直到"末包"(bit7=0)；轮询期间同步分发 */
+let waiters = [];
+async function waitResponse(cmd, timeoutMs=1500) {
+  const w = { cmd, packets: [], done: false };
+  waiters.push(w);
+  const deadline = Date.now() + timeoutMs;
+  while (!w.done && Date.now() < deadline) {
+    const data = await pollFeatureOnce();
+    if (data) dispatchProtoData(data);
+    await new Promise(r => setTimeout(r, 8));
+  }
+  waiters = waiters.filter(x => x !== w);
+  if (w.done) return w.packets;
+  throw new Error(`等待 cmd=0x${cmd.toString(16)} 响应超时`);
+}
+function dispatchProtoData(f) {
+  log("下行 " + describeFrame("down", f), "log-down");
+  const cmd = f[1] & 0x7F, more = !!(f[1] & 0x80);
+  for (const w of waiters) {
+    // 错误码也可能对应在等待的命令（设备回显请求 cmd 的错误码 = 0x40+域）
+    if (w.cmd === cmd || (cmd >= 0x40 && cmd <= 0x47)) {
+      w.packets.push(f);
+      if (!more) w.done = true;
+      break;
+    }
+  }
+}
+function onDataReport(data) {
+  if (!data.length) return;
+  if (data[0] === 0x55) { dispatchProtoData(data); return; }
+  logThrottled(`[Input 0xBA] ${hex(data)}`, "log-down");
+}
+async function sendCmd(cmd, idx, payload, timeoutMs=1500) {
+  const f = buildFrame(cmd, idx, payload, false, 0);
+  log("上行 " + describeFrame("up", f), "log-up");
+  await sendReport(RID_DATA, f);
+  return await waitResponse(cmd, timeoutMs);
+}
+
+/* ================= Tab 切换 ================= */
+document.getElementById("tabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("act", x === b));
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("act", x.id === "tab-" + b.dataset.tab));
+});
+
+/* ================= 数据通信 Tab ================= */
+document.getElementById("btnRawSend").onclick = async () => {
+  const rid = parseInt(document.getElementById("ridSend").value, 10) & 0xFF;
+  const txt = document.getElementById("rawData").value.trim();
+  const hexMode = document.getElementById("rawFmt").value === "hex";
+  let bytes;
+  try {
+    bytes = hexMode
+      ? new Uint8Array(txt.split(/\s+/).filter(s=>s).map(s => parseInt(s,16)))
+      : new Uint8Array([...txt].map(c => c.charCodeAt(0)));
+  } catch (e) { log("数据解析失败: " + e.message, "log-err"); return; }
+  if (!bytes.length) return;
+  try { await sendReport(rid, bytes); log(`上行 [RID=0x${rid.toString(16)}] ${hex(bytes)}`, "log-up"); }
+  catch (e) { log("发送失败: " + e.message, "log-err"); }
+};
+document.getElementById("btnRawRecv").onclick = async () => {
+  if (!device) return;
+  const rid = parseInt(document.getElementById("ridRecv").value, 10) & 0xFF;
+  const len = parseInt(document.getElementById("ridLen").value, 10) || 64;
+  try {
+    const d = await device.receiveFeatureReport(rid, len);
+    const arr = new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+    log(`读取 [RID=0x${rid.toString(16)}] ${hex(arr)}`, "log-down");
+    if (arr[0] === 0x55) onDataReport(arr);
+  } catch (e) { log("读取失败: " + e.message, "log-err"); }
+};
+
+/* ================= 设备配置 Tab ================= */
+const cfgTbody = document.querySelector("#cfgTbl tbody");
+document.getElementById("btnCfgQuery").onclick = async () => {
+  try {
+    const pkts = await sendCmd(CMD.QueryConfig, 0, []);
+    cfgTbody.innerHTML = "";
+    for (const f of pkts) {
+      const idxByte = f[4], act = !!(idxByte & 0x80), idx = idxByte & 0x7F;
+      const name = new TextDecoder().decode(f.slice(6, 6 + f[5])).replace(/\0/g,"");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${idx}</td><td class="mono">${name}</td>
+        <td>${act ? '<span style="color:var(--ok)">当前使用</span>' : ""}</td>
+        <td><button onclick="switchConfig(${idx})">切换</button></td>`;
+      cfgTbody.appendChild(tr);
+    }
+    log(`共 ${pkts.length} 套配置`);
+  } catch (e) { log("查询配置失败: " + e.message, "log-err"); }
+};
+window.switchConfig = async idx => {
+  try {
+    // 切换配置：空 payload + idex|0x80
+    const f = buildFrame(CMD.SetConfig, idx | 0x80, []);
+    log("上行 " + describeFrame("up", f), "log-up");
+    await sendReport(RID_DATA, f);
+    await waitResponse(CMD.SetConfig, 1500);
+    log(`已切换到配置 ${idx}`);
+    document.getElementById("btnCfgQuery").click();
+  } catch (e) { log("切换配置失败: " + e.message, "log-err"); }
+};
+document.getElementById("btnCfgSet").onclick = async () => {
+  const idx = +document.getElementById("cfgIdx").value;
+  const name = document.getElementById("cfgName").value;
+  await cfgSetName(idx, name);
+};
+document.getElementById("btnCfgDel").onclick = async () => {
+  const idx = +document.getElementById("cfgIdx").value;
+  await cfgSetName(idx, "\0");
+};
+async function cfgSetName(idx, name) {
+  try {
+    const payload = [...new TextEncoder().encode(name)];
+    await sendCmd(CMD.SetConfig, idx & 0x7F, payload);
+    log(`配置 ${idx} 名称已写入: ${name === "\0" ? "(删除)" : name}`);
+    document.getElementById("btnCfgQuery").click();
+  } catch (e) { log("写入配置失败: " + e.message, "log-err"); }
+}
+
+/* ================= 改键 Tab ================= */
+let keyFn = false, keySel = null, keyMapState = {};   // keyId -> {type, value, name}
+const kbdGrid = document.getElementById("kbdGrid");
+document.getElementById("btnFn").onclick = e => {
+  keyFn = !keyFn;
+  e.target.textContent = "FN 层: " + (keyFn ? "开" : "关");
+};
+function renderKbd() {
+  kbdGrid.innerHTML = "";
+  const cell = new Array(8*18).fill(null);
+  for (const [name, [r,c]] of Object.entries(KEYMAP_POS)) cell[r*18+c] = name;
+  for (let i = 0; i < 8*18; i++) {
+    const b = document.createElement("button");
+    const name = cell[i];
+    if (!name) { b.className = "empty"; kbdGrid.appendChild(b); continue; }
+    b.textContent = name;
+    b.dataset.keyId = i;
+    const st = keyMapState[i];
+    if (st && st.type !== "none") b.classList.add("mapped");
+    if (keySel === i) b.classList.add("sel");
+    b.onclick = () => { keySel = i; openKeyDlg(i, name); };
+    kbdGrid.appendChild(b);
+  }
+}
+renderKbd();
+function keyIdOf(name) { const rc = KEYMAP_POS[name]; return rc ? rc[0]*18 + rc[1] : null; }
+
+/* 选择弹窗 */
+let dlgKey = null;
+const dlg = document.getElementById("keyDlg");
+function openKeyDlg(keyId, name) {
+  dlgKey = { id: keyId, name };
+  document.getElementById("keyDlgTitle").textContent = `修改按键: ${name} (keyId=${keyId}${keyFn?" FN":""})`;
+  dlg.classList.add("act");
+  dlgPickRender();
+}
+function dlgPickRender() {
+  const t = document.getElementById("dlgType").value;
+  const wrap = document.getElementById("dlgPick");
+  wrap.innerHTML = "";
+  if (t === "basic") {
+    const sel = document.createElement("select"); sel.id = "dlgVal";
+    for (const [c, n] of Object.entries(HID_NAMES)) {
+      const o = document.createElement("option"); o.value = parseInt(c,16); o.textContent = `${n} (0x${(+c).toString(16).toUpperCase()})`;
+      sel.appendChild(o);
+    }
+    wrap.appendChild(sel);
+  } else if (t === "media") {
+    const sel = document.createElement("select"); sel.id = "dlgVal";
+    for (const [c, n] of Object.entries(MEDIA)) {
+      const o = document.createElement("option"); o.value = parseInt(c,16); o.textContent = `${n} (0x${(+c).toString(16).toUpperCase()})`;
+      sel.appendChild(o);
+    }
+    wrap.appendChild(sel);
+  } else if (t === "macro") {
+    wrap.innerHTML = `宏ID <select id="dlgVal"></select> 名称 <input id="dlgMacName" maxlength="8" style="width:100px">`;
+    const sel = wrap.querySelector("#dlgVal");
+    for (let i = 0x66; i <= 0x7F; i++) {
+      const o = document.createElement("option"); o.value = i; o.textContent = "0x" + i.toString(16).toUpperCase();
+      sel.appendChild(o);
+    }
+  }
+}
+document.getElementById("dlgType").onchange = dlgPickRender;
+document.getElementById("dlgCancel").onclick = () => dlg.classList.remove("act");
+document.getElementById("dlgOk").onclick = async () => {
+  const t = document.getElementById("dlgType").value;
+  let value = 0, macName = null;
+  if (t !== "none") {
+    value = +document.getElementById("dlgVal").value;
+    if (t === "macro") macName = document.getElementById("dlgMacName").value || "MACRO";
+  }
+  await applyKey(dlgKey.id, dlgKey.name, t, value, macName);
+  dlg.classList.remove("act");
+};
+async function applyKey(keyId, name, type, value, macName) {
+  const idx = +document.getElementById("keyCfg").value;
+  const id = (keyId | (keyFn ? 0x8000 : 0)) & 0xFFFF;
+  const idHi = (id >> 8) & 0xFF, idLo = id & 0xFF;
+  try {
+    let payload;
+    let cmd;
+    if (type === "basic") { cmd = CMD.SetKey;     payload = [idHi, idLo, 0x00, value & 0xFF]; }
+    else if (type === "media") { cmd = CMD.SetKeyMedia; payload = [idHi, idLo, 0x00, value & 0xFF]; }
+    else if (type === "macro") {
+      cmd = CMD.SetKeyMacro;
+      const nm = (macName || "MACRO").padEnd(8, "\0").slice(0,8);
+      payload = [idHi, idLo, 0x00, value & 0xFF, ...[...nm].map(c=>c.charCodeAt(0)&0xFF)];
+    } else { cmd = CMD.SetKey; payload = [idHi, idLo, 0x00, 0x00]; }
+    await sendCmd(cmd, idx, payload);
+    keyMapState[keyId] = { type, value, name: macName };
+    log(`按键 ${name}(keyId=${keyId}) -> ${type}${type!=="none"?" 0x"+value.toString(16).toUpperCase():""}${macName?" "+macName:""} 写入成功`);
+    renderKbd();
+  } catch (e) { log(`写入按键失败: ${e.message}`, "log-err"); }
+}
+document.getElementById("btnKeyQuery").onclick = async () => {
+  const idx = +document.getElementById("keyCfg").value;
+  keyMapState = {};
+  const names = Object.keys(KEYMAP_POS);
+  let done = 0;
+  for (const name of names) {
+    const keyId = keyIdOf(name); if (keyId == null) continue;
+    const id = keyId & 0x7FFF;
+    document.getElementById("keyStatus").textContent = `读取中 ${++done}/${names.length}: ${name}`;
+    try {
+      const pkts = await sendCmd(CMD.QueryKey, idx, [(id>>8)&0xFF, id&0xFF], 400);
+      const f = pkts[pkts.length-1];
+      if (f[1] >= 0x40) continue;                      // 错误码：未改键
+      const len = f[5];
+      if (len >= 4) {
+        const vid = (f[6]<<8)|f[7];
+        const value = (f[8]<<8)|f[9];
+        let type = "basic", extra = null;
+        if ((value & 0xFF) >= 0x66 && (value & 0xFF) <= 0x7F) { type = "macro";
+          if (len >= 12) extra = String.fromCharCode(...f.slice(10, 18)).replace(/\0/g,""); }
+        else if (value > 0xFF || MEDIA[value & 0xFFFF]) { type = "media"; }
+        if (value !== 0) keyMapState[keyId] = { type, value: value & 0xFFFF, name: extra, fn: !!(vid & 0x8000) };
+      }
+    } catch (e) { /* 超时继续 */ }
+    await new Promise(r => setTimeout(r, 5));
+  }
+  document.getElementById("keyStatus").textContent = `读取完成，${Object.keys(keyMapState).length} 个已改键`;
+  renderKbd();
+  log(`改键读取完成: ${Object.keys(keyMapState).length} 个非默认按键`);
+};
+
+/* ================= 灯效 Tab ================= */
+const effectWrap = document.getElementById("effectBtns");
+let lightEffect = 1;
+EFFECTS.forEach((n, i) => {
+  const b = document.createElement("button");
+  b.textContent = `${i} ${n}`;
+  if (i === 1) b.classList.add("act");
+  b.onclick = () => { lightEffect = i;
+    effectWrap.querySelectorAll("button").forEach((x,j)=>x.classList.toggle("act", j===i));
+    sendLight(); };
+  effectWrap.appendChild(b);
+});
+const presetWrap = document.getElementById("presetWrap");
+for (const [c, n] of PRESETS) {
+  const b = document.createElement("button");
+  b.className = "preset"; b.style.background = c; b.title = n;
+  b.onclick = () => { document.getElementById("cr").value = parseInt(c.slice(1,3),16);
+    document.getElementById("cg").value = parseInt(c.slice(3,5),16);
+    document.getElementById("cb").value = parseInt(c.slice(5,7),16); updLightUi(); sendLight(); };
+  presetWrap.appendChild(b);
+}
+function lightRgb() { return [+cr.value, +cg.value, +cb.value]; }
+function updLightUi() {
+  const [r,g,b] = lightRgb();
+  crV.textContent = r; cgV.textContent = g; cbV.textContent = b;
+  lightBriV.textContent = lightBri.value; lightSpdV.textContent = lightSpd.value;
+  document.getElementById("lightPrev").style.background = `rgb(${r},${g},${b})`;
+}
+["cr","cg","cb","lightBri","lightSpd"].forEach(id => {
+  document.getElementById(id).addEventListener("input", updLightUi);
+  document.getElementById(id).addEventListener("change", sendLight);
+});
+function updLightUiRef() { updLightUi(); }
+const cr = document.getElementById("cr"), cg = document.getElementById("cg"), cb = document.getElementById("cb"),
+      lightBri = document.getElementById("lightBri"), lightSpd = document.getElementById("lightSpd"),
+      crV = document.getElementById("crV"), cgV = document.getElementById("cgV"), cbV = document.getElementById("cbV"),
+      lightBriV = document.getElementById("lightBriV"), lightSpdV = document.getElementById("lightSpdV");
+let lightTimer = null;
+function sendLight() {                       // 滑条 250ms 防抖合并下发
+  updLightUi();
+  clearTimeout(lightTimer);
+  lightTimer = setTimeout(doSendLight, 250);
+}
+async function doSendLight() {
+  const zone = +document.getElementById("lightZone").value;
+  const payload = [zone, lightEffect, +lightBri.value, +lightSpd.value, ...lightRgb()];
+  try {
+    const pkts = await sendCmd(CMD.SetLight, 0, payload);
+    const f = pkts[0];
+    if (f[1] >= 0x40 && f[1] <= 0x47) { document.getElementById("lightStatus").textContent = "设备返回错误: " + (ERR[f[1]]||""); return; }
+    document.getElementById("lightStatus").textContent = "设置成功";
+  } catch (e) { document.getElementById("lightStatus").textContent = "发送失败: " + e.message; }
+}
+document.getElementById("btnLightSend").onclick = () => { clearTimeout(lightTimer); doSendLight(); };
+document.getElementById("btnLightQuery").onclick = async () => {
+  const zone = +document.getElementById("lightZone").value;
+  try {
+    const pkts = await sendCmd(CMD.QueryLight, 0, [zone]);
+    const f = pkts[0];
+    if (f[1] >= 0x40) { document.getElementById("lightStatus").textContent = "读取失败: " + (ERR[f[1]]||""); return; }
+    const [z, eff, bri, spd, r, g, b] = f.slice(6, 13);
+    lightEffect = eff; +cr.value !== r && (cr.value = r); cg.value = g; cb.value = b;
+    lightBri.value = bri; lightSpd.value = spd;
+    document.getElementById("lightZone").value = z;
+    effectWrap.querySelectorAll("button").forEach((x,j)=>x.classList.toggle("act", j===eff));
+    updLightUi();
+    document.getElementById("lightStatus").textContent =
+      `读取成功: 区域${z} 效果${eff}(${EFFECTS[eff]}) 亮度${bri} 速度${spd} RGB(${r},${g},${b})`;
+  } catch (e) { document.getElementById("lightStatus").textContent = "读取失败: " + e.message; }
+};
+
+/* ================= 宏 Tab ================= */
+const macSel = document.getElementById("macId");
+for (let i = 0x66; i <= 0x7F; i++) {
+  const o = document.createElement("option"); o.value = i; o.textContent = "0x" + i.toString(16).toUpperCase();
+  macSel.appendChild(o);
+}
+let macroActions = [];      // {ms, hid, press}
+let recording = false, recLast = 0;
+const macActTbody = document.querySelector("#macroActTbl tbody");
+function renderMacroActions() {
+  macActTbody.innerHTML = "";
+  macroActions.forEach((a, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${i+1}</td><td>${a.press?"按下":"释放"}</td>
+      <td class="mono">${HID_NAMES[a.hid]||("0x"+a.hid.toString(16))}</td><td>${a.ms}</td>
+      <td><button onclick="delAction(${i})">删除</button></td>`;
+    macActTbody.appendChild(tr);
+  });
+}
+window.delAction = i => { macroActions.splice(i,1); renderMacroActions(); };
+document.getElementById("btnMacRec").onclick = () => { recording = true; recLast = performance.now();
+  macroActions = []; renderMacroActions();
+  document.getElementById("macRecState").textContent = "录制中：请在页面按键（Esc 结束录制）..."; };
+document.getElementById("btnMacStop").onclick = () => { recording = false;
+  document.getElementById("macRecState").textContent = `录制完成，共 ${macroActions.length} 个动作`; };
+document.getElementById("btnMacClr").onclick = () => { macroActions = []; renderMacroActions(); };
+window.addEventListener("keydown", e => {
+  if (!recording) return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+  if (e.code === "Escape") { document.getElementById("btnMacStop").click(); return; }
+  const hid = JS2HID[e.code]; if (hid == null) return;
+  e.preventDefault();
+  const now = performance.now();
+  const gap = Math.min(Math.round(now - recLast), 20000); recLast = now;
+  macroActions.push({ ms: gap, hid, press: true });
+  renderMacroActions();
+});
+window.addEventListener("keyup", e => {
+  if (!recording) return;
+  const hid = JS2HID[e.code]; if (hid == null) return;
+  e.preventDefault();
+  const now = performance.now();
+  const hold = Math.max(Math.round(now - recLast), 10); recLast = now;
+  macroActions.push({ ms: hold, hid, press: false });
+  renderMacroActions();
+});
+/* 宏列表 */
+const macroTbody = document.querySelector("#macroTbl tbody");
+let macroListSel = null;
+document.getElementById("btnMacroList").onclick = async () => {
+  try {
+    const pkts = await sendCmd(CMD.GetAllMacro, 0, []);
+    const f = pkts[0];
+    if (f[1] >= 0x40) { log("查询宏列表失败: " + (ERR[f[1]]||""), "log-err"); return; }
+    const count = f[6];
+    macroTbody.innerHTML = "";
+    for (let i = 0; i < count; i++) {
+      const base = 7 + i * 9;             // id(1B) + name(8B)
+      const id = f[base], nm = String.fromCharCode(...f.slice(base+1, base+9)).replace(/\0/g,"");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="mono">0x${id.toString(16).toUpperCase()}</td><td class="mono">${nm}</td>`;
+      tr.onclick = () => { macroListSel = id;
+        macroTbody.querySelectorAll("tr").forEach(x=>x.style.background="");
+        tr.style.background = "#26303c"; };
+      macroTbody.appendChild(tr);
+    }
+    log(`宏列表: ${count} 套`);
+  } catch (e) { log("查询宏列表失败: " + e.message, "log-err"); }
+};
+document.getElementById("btnMacroDel").onclick = async () => {
+  if (macroListSel == null) { log("请先在列表中选择宏", "log-err"); return; }
+  try {
+    const name = "MACRO";
+    await sendCmd(CMD.DeleteMacro, 0, [macroListSel, ...[...name.padEnd(8,"\0")].map(c=>c.charCodeAt(0))]);
+    log(`宏 0x${macroListSel.toString(16)} 已删除`);
+    document.getElementById("btnMacroList").click();
+  } catch (e) { log("删除宏失败: " + e.message, "log-err"); }
+};
+/* 下载宏内容 0x05 */
+document.getElementById("btnMacroQuery").onclick = async () => {
+  if (macroListSel == null) { log("请先在列表中选择宏", "log-err"); return; }
+  try {
+    const pkts = await sendCmd(CMD.QueryMacro, macroListSel & 0x7F, [0x00], 2000);
+    const f = pkts[pkts.length-1];
+    if (f[1] >= 0x40) { log("下载宏失败: " + (ERR[f[1]]||""), "log-err"); return; }
+    const repeat = f[6];
+    document.getElementById("macRepeat").value = repeat === 0xFF ? "255" : repeat;
+    macroActions = [];
+    for (let p = 0; p < pkts.length; p++) {
+      const d = pkts[p], base = p === 0 ? 7 : 6;   // 首包带 repeat
+      for (let i = base; i + 3 <= d[5] + 6; i += 3) {
+        const t = (d[i] | (d[i+1] << 8)) & 0x7FFF;
+        macroActions.push({ ms: t, hid: d[i+2], press: !!(d[i+1] & 0x80) });
+      }
+    }
+    renderMacroActions();
+    document.getElementById("macId").value = macroListSel;
+    document.getElementById("macRecState").textContent = `已下载 ${macroActions.length} 个动作`;
+  } catch (e) { log("下载宏失败: " + e.message, "log-err"); }
+};
+/* 上传宏 0x07：8B 名称 + 1B repeat + 3B/动作（time_lo, time_hi|press, key） */
+document.getElementById("btnMacUp").onclick = async () => {
+  const id = +macSel.value;
+  const name = (document.getElementById("macName").value || "MACRO").padEnd(8,"\0").slice(0,8);
+  let repeat = parseInt(document.getElementById("macRepeat").value, 10) || 1;
+  if (repeat === 255) repeat = 0xFF;
+  if (!macroActions.length) { log("没有动作，先录制或下载", "log-err"); return; }
+  try {
+    const acts = macroActions.map(a => {
+      const t = Math.min(a.ms, 0x7FFF);
+      return [t & 0xFF, ((t >> 8) & 0x7F) | (a.press ? 0x80 : 0), a.hid];
+    }).flat();
+    const PER = 16;                               // 每包 16 个动作（C# 版一致）
+    for (let off = 0, p = 0; off < acts.length; off += PER*3, p++) {
+      const chunk = acts.slice(off, off + PER*3);
+      const more = off + PER*3 < acts.length;
+      const payload = [...[...name].map(c=>c.charCodeAt(0)&0xFF), repeat & 0xFF, ...chunk];
+      const f = buildFrame(CMD.SetMacro, 0, payload, more, p * PER);   // offset = 动作序号（大端）
+      log("上行 " + describeFrame("up", f), "log-up");
+      await sendReport(RID_DATA, f);
+      await waitResponse(CMD.SetMacro, 1500);
+      await new Promise(r => setTimeout(r, 10));
+    }
+    log(`宏 0x${id.toString(16).toUpperCase()} "${document.getElementById("macName").value}" 上传完成 (${macroActions.length} 动作)`);
+  } catch (e) { log("上传宏失败: " + e.message, "log-err"); }
+};
+
+/* ================= OTA =================
+ * SLB 帧格式（与固件 usb_slb_ota.c 一致，63 字节负载）：
+ *   [0]=msgNum(低4位) [1]=opcode [2]=(total-1)<<4|cur [3]=len [4..]=data
+ * 响应同样格式（opcode 0xA0/0xA2/0xA3/0xA5），经 GET_REPORT 轮询取回 */
+function crc16ccitt(bytes, len) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < len; i++) {
+    crc ^= bytes[i] << 8;
+    for (let b = 0; b < 8; b++)
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+  }
+  return crc;
+}
+function onOtaReport(data) {         // 中断 IN 兜底路径（固件一般不推，仅记录）
+  if (!data.length) return;
+  logThrottled(`OTA下行 [0xFA] ${hex(data.slice(0, 16))}${data.length>16?" ...":""}`, "log-ota");
+}
+function slbFrame(msgNum, opcode, frameByte, data) {
+  const f = new Uint8Array(63);
+  f[0] = msgNum & 0x0F;
+  f[1] = opcode;
+  f[2] = frameByte;
+  f[3] = data.length;
+  f.set(data, 4);
+  return f;
+}
+async function waitOta(opcode, timeoutMs=3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const data = await pollFeatureOnce();
+    if (data && data[1] === opcode) return data;
+    await new Promise(r => setTimeout(r, 8));
+  }
+  throw new Error(`等待 OTA 0x${opcode.toString(16)} 响应超时`);
+}
+let otaAbort = false;
+let otaMsgNum = 0;
+let otaFwVer = [0,0,0,0];
+function otaNextMsg() { const m = otaMsgNum; otaMsgNum = (otaMsgNum + 1) & 0x0F; return m; }
+document.getElementById("btnOtaVer").onclick = async () => {
+  try {
+    await sendReport(RID_OTA, slbFrame(otaNextMsg(), 0x20, 0x00, [0x00]));
+    const r = await waitOta(0xA0, 3000);
+    log(`0xA0 原始: ${hex(r.slice(0, 4 + r[3]))}（len=${r[3]}）`, "log-ota");
+    const d = r.slice(4, 4 + r[3]);        // ver[9]: [0]类型 [1..2]产品ID LE [3..5]主.次.修订 [6]保留 [7..8]资源版本 LE
+    if (d.length >= 6) {
+      const productId = d[1] | (d[2] << 8);
+      otaFwVer = [d[3], d[4], d[5], 0];
+      let txt = `产品ID: 0x${productId.toString(16).toUpperCase().padStart(4,"0")}  固件版本: ${d[3]}.${d[4]}.${d[5]}`;
+      if (d.length >= 9) {
+        const resVer = (d[8] << 8) | d[7];      // USB_OTA_FW_RES_VERSION，16 位 LE
+        txt += `  资源版本: ${resVer.toString(16).toUpperCase().padStart(4,"0")}`;
+      }
+      document.getElementById("otaVer").textContent = txt;
+      log("OTA " + txt, "log-ota");
+    } else {
+      document.getElementById("otaVer").textContent = `响应异常: ${hex(r.slice(0,16))}`;
+    }
+  } catch (e) { log("OTA 版本查询失败: " + e.message, "log-err"); }
+};
+document.getElementById("btnOtaAbort").onclick = () => { otaAbort = true; };
+document.getElementById("btnOtaStart").onclick = async () => {
+  const fileEl = document.getElementById("otaFile");
+  if (!fileEl.files.length) { log("请先选择固件文件", "log-err"); return; }
+  const buf = new Uint8Array(await fileEl.files[0].arrayBuffer());
+  const total = buf.length;
+  const PAYLOAD = 56;
+  const crc = crc16ccitt(buf, total);
+  otaAbort = false;
+  const status = document.getElementById("otaStatus");
+  const setPct = (p, txt) => { document.getElementById("otaBar").style.width = p + "%";
+    document.getElementById("otaPct").textContent = `${p}% ${txt||""}`; };
+  try {
+    /* 1. 版本查询（升级请求回填设备上报的版本） */
+    await sendReport(RID_OTA, slbFrame(otaNextMsg(), 0x20, 0x00, [0x00]));
+    const vr = await waitOta(0xA0, 3000);
+    const vd = vr.slice(4, 4 + vr[3]);
+    if (vd.length >= 6) otaFwVer = [vd[3], vd[4], vd[5], 0];
+    log(`OTA 固件版本: ${vd[3]}.${vd[4]}.${vd[5]}`, "log-ota");
+    /* 2. 升级请求 0x22: [type][ver 4B LE][size 4B LE][crc16 2B LE][00]，设备收到即擦除 */
+    const req = new Uint8Array(12);
+    req[0] = 0x00;
+    req.set(otaFwVer, 1);
+    const dv = new DataView(req.buffer);
+    dv.setUint32(5, total, true);
+    dv.setUint16(9, crc, true);
+    req[11] = 0x00;
+    await sendReport(RID_OTA, slbFrame(otaNextMsg(), 0x22, 0x00, req));
+    const ar = await waitOta(0xA2, 10000);
+    const ad = ar.slice(4, 4 + ar[3]);
+    if (!ad[0]) throw new Error("设备拒绝升级 (upgradeFlag=0)");
+    const ackOffset = ad[1] | (ad[2]<<8) | (ad[3]<<16) | (ad[4]<<24);
+    const packetNum = (ad[5] & 0x0F) + 1;
+    log(`升级已允许：起始偏移 ${ackOffset}，每组 ${packetNum} 包`, "log-ota");
+    /* 3. 数据阶段：每组 packetNum 包后等 0xA3（设备按批确认实际写入字节） */
+    let sent = ackOffset;
+    let idx = Math.floor(sent / PAYLOAD);
+    while (sent < total && !otaAbort) {
+      const remain = total - sent;
+      const batchFrames = Math.min(packetNum, Math.ceil(remain / PAYLOAD));
+      for (let s = 0; s < batchFrames && sent < total; s++, idx++) {
+        const chunk = buf.slice(idx * PAYLOAD, Math.min((idx+1) * PAYLOAD, total));
+        const frameByte = (((batchFrames - 1) & 0x0F) << 4) | (s & 0x0F);
+        await sendReport(RID_OTA, slbFrame(otaNextMsg(), 0x24, frameByte, chunk));
+        sent += chunk.length;
+        const pct = Math.min(Math.floor(sent * 99 / total), 99);
+        setPct(pct, `(${idx+1}/${Math.ceil(total/PAYLOAD)} 包)`);
+        status.textContent = `数据发送中: ${sent}/${total} 字节`;
+        if (otaAbort) break;
+      }
+      if (sent >= total || otaAbort) break;
+      const ack = await waitOta(0xA3, 5000);
+      const confirmed = ack[5] | (ack[6]<<8) | (ack[7]<<16) | (ack[8]<<24);
+      log(`0xA3 确认: 设备已写入 ${confirmed} 字节`, "log-ota");
+      if (confirmed < sent) {         // 设备实际写入变少：回退重发
+        idx = Math.floor(confirmed / PAYLOAD);
+        sent = confirmed;
+      }
+    }
+    if (otaAbort) { status.textContent = "已中止"; log("OTA 已中止", "log-err"); return; }
+    /* 4. 完成通知 → 0xA5 校验结果，设备收齐后自行重启 */
+    await sendReport(RID_OTA, slbFrame(otaNextMsg(), 0x25, 0x00, [0x01]));
+    const fr = await waitOta(0xA5, 10000);
+    const ok = fr[4] === 0x01;
+    setPct(100, ok ? "校验通过" : "校验失败");
+    status.textContent = ok ? "升级完成，设备将自行重启" : "固件校验失败";
+    log("OTA " + (ok ? "完成 ✓ 设备重启中" : "校验失败 ✗"), ok ? "log-ota" : "log-err");
+  } catch (e) {
+    status.textContent = "OTA 失败: " + e.message;
+    log("OTA 失败: " + e.message, "log-err");
+  }
+};
+
+/* ================= 启动 ================= */
+updLightUiRef();
+log("就绪。点击右上角'连接设备'选择 VID=0x1919 PID=0x1919 的键盘（Chrome/Edge）。");
+</script>
+</body>
+</html>
